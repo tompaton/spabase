@@ -1,191 +1,251 @@
 // Persistence management
 
-import { createDeferred, Show } from "solid-js";
+import { createDeferred, createEffect, on, Show } from "solid-js";
+import { createStore } from "solid-js/store";
 
-class AppSync {
-    constructor(state, setState, key) {
-        this.state = state;
-        this.setState = (...args) => { console.log('setState', args); setState.apply(null, args); };
-        this.key = key;
+import styles from './AppSync.module.css';
 
-        this.initSave();
-        this.bindEvents();
-        this.syncing = false;
-    }
+function createSyncedStore(key, initialState, uiState) {
+    // key: string used to identify this store in localStorage
+    // initialState: object containing the initial state of the main content
+    //   store, this will be synced
+    // uiState: object containing the initial state of the UI store, this will
+    //   not be synced
+    const [state, setState] = createStore(initialState);
+    const [ui, setUI] = createStore(uiState);
+    const [sync, setSync] = createStore({ url: null, date: null, active: false, failed: false });
 
-    initSave() {
-        // load state
-        if (localStorage[this.key]) {
-            console.log('loading...');
-            this.setState(JSON.parse(localStorage[this.key]));
-        }
+    syncLocalStorateState(key, state, setState);
+    syncLocalStorateState(key + '-ui', ui, setUI);
+    syncLocalStorateState(key + '-sync', sync, setSync);
 
-        // save state when it changes
-        createDeferred(() => {
-            console.log('saving...');
-            localStorage[this.key] = JSON.stringify(this.state);
+    // sync state with server when it changes (but not if sync url/date changes)
+    createEffect(
+        on(
+            () => JSON.stringify(state),
+            (content) => syncServerState(content),
+            { defer: true }
+        )
+    );
 
-            // save state to server if sync enabled
-            if (this.syncEnabled()) {
-                // TODO: only if it wasn't a ui/sync change
-                this.syncServerState(true);
+    bindDocumentEvents(syncServerState);
+
+    function syncServerState(content) {
+        if (sync.url) {
+            if (!content && sync.failed) {
+                console.log('retrying failed sync...');
+                content = localStorage[key];
             }
-        });
-    }
 
-    bindEvents() {
-        // capture and remove previous event listener if any, otherwise vite will keep
-        // adding new ones each time the code is reloaded
-        if (document._visibilitychangeeventlistener !== undefined) {
-            document.removeEventListener('visibilitychange', document._visibilitychangeeventlistener);
+            // console.log(content ? 'syncing (writing)...' : 'syncing...');
+
+            setSync('active', true);
+            getServerState(sync.url, sync.date)
+                .then(
+                    (result) => {
+                        // write back after we reconcile
+                        content = null;
+
+                        // console.log('Loaded');
+                        setSync('date', result[0]);
+                        // console.log('reconciling...');
+                        setState(result[1]);
+                    })
+                .catch((error) => {
+                    // console.log(error.message);
+                })
+                .finally(() => {
+                    if (content) {
+                        putServerState(sync.url, content)
+                            .then(date => setSync({ date: date, failed: false }))
+                            .catch((error) => {
+                                console.error(error.message);
+                                // if we're offline, we need to retry the write later
+                                if (error.message.indexOf('Network') !== -1)
+                                    setSync('failed', true);
+                            })
+                    }
+                    setSync('active', false);
+                });
         }
-        const listener = this.handleVisibilitychange.bind(this);
-        document.addEventListener('visibilitychange', listener);
-        document._visibilitychangeeventlistener = listener;
-
-        // enable timer polling for changes
-        console.log('enable timer...');
-        this.poll_timer = window.setInterval(this.handleTimer.bind(this), 5000);
     }
 
-    handleVisibilitychange() {
-        console.log('visibilitychange...', document.visibilityState);
+    // return value acts like a single store that allows access to sync and ui
+    // with state.ui and state.sync and setState('ui', ...) and setState('sync', ...)
+    // but we can handle each part differently so we don't trigger unnecessary
+    // updates
+
+    function setStateProxy(...args) {
+        if (args[0] === 'sync') {
+            return setSync.apply(null, args.slice(1));
+        } else if (args[0] === 'ui') {
+            return setUI.apply(null, args.slice(1));
+        } else {
+            // anything else falls through to content
+            setState.apply(null, args);
+        }
+    }
+
+    const stateProxy = new Proxy(state, {
+        get(obj, prop) {
+            if (prop === 'sync') {
+                return sync;
+            }
+            if (prop === 'ui') {
+                return ui;
+            }
+            // private properties for SyncButton and SyncSettings
+            if (prop[0] === '_') {
+                if (prop === '_setState') {
+                    return setStateProxy;
+                }
+                if (prop === '_syncServerState') {
+                    return syncServerState;
+                }
+                if (prop === '_generateRandomSyncUrl') {
+                    return () => {
+                        // random string to uniquely identify this device
+                        setSync('url',
+                            `https://${key}.tompaton.com/saved/`
+                            + Math.random().toString(36).substring(2, 8)
+                            + Math.random().toString(36).substring(2, 8));
+                    }
+                }
+            }
+            // anything else falls through to content
+            return obj[prop];
+        }
+    });
+
+    return [stateProxy, setStateProxy];
+}
+
+function syncLocalStorateState(key, state, setState) {
+    // load state from localStorage and trigger save state to localStorage when it changes
+
+    // load state
+    if (localStorage[key]) {
+        // console.log(`loading ${key}...`);
+        setState(JSON.parse(localStorage[key]));
+    }
+
+    // trigger save when changed
+    createDeferred(() => {
+        // console.log(`saving ${key}...`);
+        localStorage[key] = JSON.stringify(state);
+    });
+
+}
+
+function bindDocumentEvents(syncServerState) {
+    // bind events to handle visibility change and a timer for polling
+    // to check for updates from other devices
+
+    // capture and remove previous event listener if any, otherwise vite will keep
+    // adding new ones each time the code is reloaded
+    if (document._visibilitychangeeventlistener !== undefined) {
+        document.removeEventListener('visibilitychange', document._visibilitychangeeventlistener);
+    }
+    document.addEventListener('visibilitychange', handleVisibilitychange);
+    document._visibilitychangeeventlistener = handleVisibilitychange;
+
+    // enable timer polling for changes
+    // console.log('enable timer...');
+    let poll_timer = window.setInterval(handleTimer, 5000);
+
+    function handleVisibilitychange() {
+        // console.log('visibilitychange...', document.visibilityState);
         if (document.visibilityState === 'visible') {
             // enable timer polling for changes
-            console.log('enable timer...');
-            this.poll_timer = window.setInterval(this.handleTimer.bind(this), 5000);
+            // console.log('enable timer...');
+            poll_timer = window.setInterval(handleTimer, 5000);
 
             // check for changes when user returns to the page
-            if (this.syncEnabled())
-                this.syncServerState();
+            syncServerState();
         } else {
             // disable timer polling for changes
-            console.log('clearing timer...');
-            window.clearInterval(this.poll_timer);
+            // console.log('clearing timer...');
+            window.clearInterval(poll_timer);
         }
     }
 
-    handleTimer() {
-        console.log('timer...');
-        if (this.syncEnabled())
-            this.syncServerState();
+    function handleTimer() {
+        // console.log('timer...');
+        syncServerState();
     }
+}
 
-    syncEnabled() {
-        return this.state.sync?.url;
-    }
+function getServerState(url, date) {
+    // console.log('GET');
+    // GET using If-Modified-Since header which will return nothing if it
+    // hasn't changed
+    const config = {
+        method: 'GET',
+        credentials: 'include',
+        mode: 'cors',
+        headers: {}
+    };
+    if (date)
+        config.headers['If-Modified-Since'] = date;
 
-    generateRandomSyncUrl() {
-        // random string to uniquely identify this device
-        this.setState('sync', 'url',
-            `https://${this.key}.tompaton.com/saved/`
-            + Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2));
-    }
+    return fetch(url, config)
+        .then(response => {
+            if (response.status === 200) {
+                // console.log('Updated');
+                return response.json()
+                    .then(data => [response.headers.get("Last-Modified"), data]);
+            } else {
+                // other status --> 304 no update/404 not found/error
+                throw new Error('No update: ' + response.status)
+            }
+        })
+}
 
-    getStateJSON() {
-        // deep copy
-        const backup = JSON.parse(JSON.stringify(this.state));
-
-        // remove ui/device state
-        delete backup.ui;
-        delete backup.sync;
-
-        return JSON.stringify(backup);
-    }
-
-    syncServerState(writing) {
-        if (this.syncing) return;
-
-        this.syncing = true;
-
-        console.log('syncing...');
-
-        // if writing is false, we're just checking for updates from another
-        // device, writing back the merged changes if any.
-
-        // if writing is true, we're updating the server with our latest state,
-        // but first we have to check for updates and merge.
-
-        // GET using If-Modified-Since header which will return nothing if it
-        // hasn't changed
-        const config = {
-            method: 'GET',
+function putServerState(url, body) {
+    // console.log('PUT');
+    return fetch(
+        url,
+        {
+            method: 'PUT',
             credentials: 'include',
             mode: 'cors',
-            headers: {}
-        };
-        if (this.state.sync.date)
-            config.headers['If-Modified-Since'] = this.state.sync.date;
-
-        fetch(this.state.sync.url, config)
-            .then(response => {
-                if (response.status === 200) {
-                    console.log('Updated');
-                    this.setState('sync', 'date', response.headers.get("Last-Modified"));
-                    return response.json();
-                }
-                // status 304 --> no update
-                if (response.status === 304) {
-                    console.log('No update');
-                    return;
-                }
-                // status 404 --> create
-                if (response.status === 404) {
-                    console.log('Not found');
-                    return;
-                }
-                // other status --> error
-                console.error('Error: ' + response.status);
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: body
+        })
+        .then(response => {
+            if (response.status === 201 || response.status === 204) {
+                // console.log('Saved:' + response.status);
+                return response.headers.get("Date");
+            } else {
+                throw new Error('No Date: ' + response.status);
             }
-            )
-            .then(
-                data => {
-                    if (data) {
-                        console.log('Loaded');
-                        this.setState(data);
-                        writing = true;
-                    }
-
-                    if (writing) {
-                        const config = {
-                            method: 'PUT',
-                            credentials: 'include',
-                            mode: 'cors',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: this.getStateJSON()
-                        };
-                        fetch(this.state.sync.url, config)
-                            .then(response => {
-                                console.log('Saved:' + response.status);
-                                if (response.status === 201 || response.status === 204) {
-                                    this.setState('sync', 'date', response.headers.get("Date"));
-                                }
-                                this.syncing = false;
-                            });
-                    } else {
-                        this.syncing = false;
-                    }
-                }
-            );
-    }
+        });
 }
 
 // Sync management UI
 
 function SyncButton(props) {
+    const syncClass = () => {
+        if (props.state.sync.url)
+            return props.state.sync.active
+                ? styles.syncActive
+                : props.state.sync.failed
+                    ? styles.syncFail
+                    : styles.syncOk;
+    };
     return (
         <>
-            <button
+            <button classList={{ [syncClass()]: true }}
                 onclick={() => document.getElementById('sync_dialog').showModal()}
-                title={props.sync.syncEnabled()
-                    ? "Sync enabled (click for settings)"
+                title={props.state.sync.url
+                    ? (props.state.sync.failed ? "Sync failed (click for settings)" : "Sync enabled (click for settings)")
                     : "Sync disabled (click for settings)"}>
-                {props.sync.syncEnabled() ? "Synced" : "Not synced"}
+                {props.state.sync.url ? "Synced" : "Not synced"}
             </button>
-            <Show when={props.sync.syncEnabled()}>
-                <button onclick={() => props.sync.syncServerState()} title="Refresh state from server">↻</button>
+            <Show when={props.state.sync.url}>
+                <button onclick={() => props.state._syncServerState()} title="Refresh state from server">↻</button>
             </Show>
         </>
     );
@@ -199,12 +259,19 @@ function SyncSettings(props) {
                 Enter sync settings url to share data between devices: <br />
                 (contact me to register for free, or provide your own WebDAV url)
             </p>
+            <Show when={props.state.sync.url && !props.state.sync.failed}>
+                <p>Sync enabled and active.</p>
+            </Show>
+            <Show when={props.state.sync.url && props.state.sync.failed}>
+                <p>Sync enabled, most recent sync failed, will retry.</p>
+            </Show>
             <form method="dialog">
                 <p>
-                    <label for="sync_url">Sharing url</label>
-                    <input id="sync_url" type="text" value={props.sync.state.sync?.url || ''}
-                        onchange={(event) => props.sync.setState('sync', 'url', event.target.value)} />
-                    <button onclick={(event) => { event.preventDefault(); props.sync.generateRandomSyncUrl() }}
+                    <label for="sync_url">Sharing url</label><br />
+                    <input id="sync_url" type="url" value={props.state.sync.url || ''}
+                        size={60}
+                        onchange={(event) => props.state._setState('sync', 'url', event.target.value)} />
+                    <button onclick={(event) => { event.preventDefault(); props.state._generateRandomSyncUrl() }}
                         title="Generate random sync url">new</button>
                 </p>
                 <button>Close</button>
@@ -213,4 +280,4 @@ function SyncSettings(props) {
     );
 }
 
-export { AppSync, SyncButton, SyncSettings };
+export { createSyncedStore, SyncButton, SyncSettings };

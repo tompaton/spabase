@@ -1,18 +1,18 @@
-import { createStore } from "solid-js/store";
 import styles from './App.module.css';
-import { AppSync, SyncButton, SyncSettings } from './AppSync';
-
-const [state, setState] = createStore({
-  sync: { url: null, date: null },
-  ui: {
-    // add UI state here (won't be synced)
-  },
-  // add app state here (will be synced between devices)
-  content: ''
-});
+import { createSyncedStore, SyncButton, SyncSettings } from './AppSync';
 
 function App() {
-  const sync = new AppSync(state, setState, 'spabase');
+
+  const [state, setState] = createSyncedStore(
+    'spabase',
+    {
+      // add app state here (will be synced between devices)
+      content: ''
+    },
+    {
+      // add UI state here (won't be synced)
+    }
+  );
 
   return (
     <div class={styles.App}>
@@ -31,8 +31,8 @@ function App() {
 
         <p>Configure syncing:</p>
 
-        <SyncButton sync={sync} />
-        <SyncSettings sync={sync} />
+        <SyncButton state={state} />
+        <SyncSettings state={state} />
       </div>
       <footer>
         <p>&copy;2025 <a href="https://tompaton.com/">tompaton.com</a></p>

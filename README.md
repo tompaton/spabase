@@ -27,6 +27,19 @@ In production the nginx server handles WebDAV and serves the app using static fi
 TODO: push production container
 
 
+## Notes
+
+synced store
+- objects will be reconciled but this will only add/update keys.
+- a key will need to be set to null rather than removing it.
+
+TODO: state diagram
+
+
 ## To Do
 
-- add sample/test save/sync
+- vary timer interval based on response status? shorter if there was a change, 
+  slow down if none/offline.
+- production image
+- deploy
+- push to github
