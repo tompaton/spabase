@@ -1,7 +1,8 @@
 // Persistence management
 
-import { createDeferred, createEffect, on, Show } from "solid-js";
+import { createDeferred, createEffect, createSignal, on, Show } from "solid-js";
 import { createStore } from "solid-js/store";
+import { debounce } from "@solid-primitives/scheduled";
 
 import styles from './AppSync.module.css';
 
@@ -13,7 +14,8 @@ function createSyncedStore(key, initialState, uiState) {
     //   not be synced
     const [state, setState] = createStore(initialState);
     const [ui, setUI] = createStore(uiState);
-    const [sync, setSync] = createStore({ url: null, date: null, active: false, failed: false });
+    const [sync, setSync] = createStore({ url: null, date: null, failed: false });
+    const [syncActive, setSyncActive] = createSignal(false);
 
     syncLocalStorateState(key, state, setState);
     syncLocalStorateState(key + '-ui', ui, setUI);
@@ -28,9 +30,7 @@ function createSyncedStore(key, initialState, uiState) {
         )
     );
 
-    bindDocumentEvents(syncServerState);
-
-    function syncServerState(content) {
+    function rawSyncServerState(content) {
         if (sync.url) {
             if (!content && sync.failed) {
                 console.log('retrying failed sync...');
@@ -39,7 +39,7 @@ function createSyncedStore(key, initialState, uiState) {
 
             // console.log(content ? 'syncing (writing)...' : 'syncing...');
 
-            setSync('active', true);
+            setSyncActive(true);
             getServerState(sync.url, sync.date)
                 .then(
                     (result) => {
@@ -65,10 +65,14 @@ function createSyncedStore(key, initialState, uiState) {
                                     setSync('failed', true);
                             })
                     }
-                    setSync('active', false);
+                    setSyncActive(false);
                 });
         }
     }
+
+    const syncServerState = debounce(rawSyncServerState, 250);
+
+    bindDocumentEvents(syncServerState);
 
     // return value acts like a single store that allows access to sync and ui
     // with state.ui and state.sync and setState('ui', ...) and setState('sync', ...)
@@ -90,6 +94,9 @@ function createSyncedStore(key, initialState, uiState) {
         get(obj, prop) {
             if (prop === 'sync') {
                 return sync;
+            }
+            if (prop === 'sync_active') {
+                return syncActive();
             }
             if (prop === 'ui') {
                 return ui;
@@ -130,10 +137,12 @@ function syncLocalStorateState(key, state, setState) {
     }
 
     // trigger save when changed
-    createDeferred(() => {
+    function save(content) {
         // console.log(`saving ${key}...`);
-        localStorage[key] = JSON.stringify(state);
-    });
+        localStorage[key] = content;
+    }
+    const debounced_save = debounce(save, 250);
+    createDeferred(() => debounced_save(JSON.stringify(state)));
 
 }
 
@@ -229,7 +238,7 @@ function putServerState(url, body) {
 function SyncButton(props) {
     const syncClass = () => {
         if (props.state.sync.url)
-            return props.state.sync.active
+            return props.state.sync_active
                 ? styles.syncActive
                 : props.state.sync.failed
                     ? styles.syncFail
