@@ -2,7 +2,7 @@
 
 import { createDeferred, createEffect, createSignal, on, Show } from "solid-js";
 import { createStore } from "solid-js/store";
-import { debounce } from "@solid-primitives/scheduled";
+import { throttle } from "@solid-primitives/scheduled";
 
 import styles from './AppSync.module.css';
 
@@ -73,7 +73,7 @@ function createSyncedStore(key, initialState, uiState) {
         }
     }
 
-    const syncServerState = debounce(rawSyncServerState, 250);
+    const syncServerState = throttle(rawSyncServerState, 250);
 
     bindDocumentEvents(syncServerState);
 
@@ -144,8 +144,8 @@ function syncLocalStorateState(key, state, setState) {
         // console.log(`saving ${key}...`);
         localStorage[key] = content;
     }
-    const debounced_save = debounce(save, 250);
-    createDeferred(() => debounced_save(JSON.stringify(state)));
+    const throttled_save = throttle(save, 250);
+    createDeferred(() => throttled_save(JSON.stringify(state)));
 
 }
 
