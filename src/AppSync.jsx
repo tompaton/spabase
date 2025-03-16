@@ -53,6 +53,9 @@ function createSyncedStore(key, initialState, uiState) {
                     })
                 .catch((error) => {
                     // console.log(error.message);
+                    // if we're offline, we need to retry the write later
+                    if (error.message.indexOf('Network') !== -1)
+                        setSync('failed', true);
                 })
                 .finally(() => {
                     if (content) {
