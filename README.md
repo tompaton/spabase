@@ -47,4 +47,4 @@ TODO: state diagram
 
 - vary timer interval based on response status? shorter if there was a change, 
   slow down if none/offline.
-- push to github
+- move all the docker/nginx config into a directory
