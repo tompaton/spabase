@@ -24,8 +24,15 @@ setting the HOSTNAME environment variable allows access via another device
 
 In production the nginx server handles WebDAV and serves the app using static files.
 
-TODO: push production container
+Build and push production container:
 
+```bash
+docker-compose --profile prod build
+docker-compose --profile prod push
+
+scp production.env production.yml phosphorus:/var/data/spabase.tompaton.com/
+ssh tom@phosphorus "cd /var/data/spabase.tompaton.com ; docker-compose -f production.yml pull; docker-compose -f production.yml up -d"
+```
 
 ## Notes
 
@@ -40,5 +47,4 @@ TODO: state diagram
 
 - vary timer interval based on response status? shorter if there was a change, 
   slow down if none/offline.
-- deploy
 - push to github

@@ -18,3 +18,11 @@ services:
       - "/app/node_modules"
     environment:
       "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS": "${HOSTNAME}"
+
+  prod:
+    build:
+      context: .
+      target: production-stage
+    image: registry.tompaton.com/tompaton/spabase
+    profiles:
+      - 'prod'

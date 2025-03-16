@@ -1,9 +1,17 @@
+version: "3"
+
 services:
-  web:
-    build:
-      context: .
-      target: production-stage
-    ports:
-      - "8080:80"
+  spabase:
+    image: registry.tompaton.com/tompaton/spabase
+    env_file:
+      - production.env
+    networks:
+      - www
     volumes:
       - ./data:/data
+    restart: unless-stopped
+
+networks:
+  www:
+    external:
+      name: www
