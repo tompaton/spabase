@@ -14,7 +14,7 @@ function createSyncedStore(key, initialState, uiState) {
     //   not be synced
     const [state, setState] = createStore(initialState);
     const [ui, setUI] = createStore(uiState);
-    const [sync, setSync] = createStore({ url: null, date: null, failed: false });
+    const [sync, setSync] = createStore({ url: null, date: null, failed: false, error: '' });
     const [syncActive, setSyncActive] = createSignal(false);
 
     syncLocalStorateState(key, state, setState);
@@ -53,19 +53,22 @@ function createSyncedStore(key, initialState, uiState) {
                     })
                 .catch((error) => {
                     // console.log(error.message);
+                    // fail for 401/403/404 etc.
+                    if (error.message.indexOf('304') === -1)
+                        setSync({ failed: true, error: error.message });
                     // if we're offline, we need to retry the write later
                     if (error.message.indexOf('Network') !== -1)
-                        setSync('failed', true);
+                        setSync({ failed: true, error: error.message });
                 })
                 .finally(() => {
                     if (content) {
                         putServerState(sync.url, content)
-                            .then(date => setSync({ date: date, failed: false }))
+                            .then(date => setSync({ date: date, failed: false, error: '' }))
                             .catch((error) => {
                                 console.error(error.message);
+                                // fail for 401/403/404 etc.
                                 // if we're offline, we need to retry the write later
-                                if (error.message.indexOf('Network') !== -1)
-                                    setSync('failed', true);
+                                setSync({ failed: true, error: error.message });
                             })
                     }
                     setSyncActive(false);
@@ -208,7 +211,7 @@ function getServerState(url, date) {
                     .then(data => [response.headers.get("Last-Modified"), data]);
             } else {
                 // other status --> 304 no update/404 not found/error
-                throw new Error('No update: ' + response.status)
+                throw new Error('GET status: ' + response.status)
             }
         })
 }
@@ -231,7 +234,7 @@ function putServerState(url, body) {
                 // console.log('Saved:' + response.status);
                 return response.headers.get("Date");
             } else {
-                throw new Error('No Date: ' + response.status);
+                throw new Error('PUT status: ' + response.status);
             }
         });
 }
@@ -276,6 +279,7 @@ function SyncSettings(props) {
             </Show>
             <Show when={props.state.sync.url && props.state.sync.failed}>
                 <p>Sync enabled, most recent sync failed, will retry.</p>
+                <p style={{ color: 'red' }}>{props.state.sync.error}</p>
             </Show>
             <form method="dialog">
                 <p>
